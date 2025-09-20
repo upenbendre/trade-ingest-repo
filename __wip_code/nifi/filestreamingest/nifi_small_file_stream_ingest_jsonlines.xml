@@ -1,0 +1,324 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!--
+  NiFi Template (updated) - Small-File-Stream-Ingest Process Group
+  Changes:
+    - Generate correlation_id and manifest_path at file-level (UpdateAttribute/EvaluateJsonPath) BEFORE splitting.
+    - Chunking: SplitRecord Record Count = 5000 (default, tunable).
+    - PublishPulsarRecord: batching enabled, Batch Size = 100, Concurrent Tasks = 4.
+-->
+<template encoding-version="1.0">
+  <name>Small-File-Stream-Ingest-Updated</name>
+  <description>Updated scaffold NiFi template: ListS3 -&gt; FetchS3Object -&gt; UpdateAttribute/EvaluateJsonPath -&gt; SplitRecord (chunks) -&gt; ConvertRecord -&gt; ValidateRecord -&gt; PublishPulsarRecord (batch) -&gt; Archive / DLQ</description>
+  <snippet>
+    <groupId>small-file-ingest-group</groupId>
+    <processors>
+      <processor>
+        <id>proc-lists3</id>
+        <name>ListS3</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-standard-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Bucket">s3://your-landing-bucket/prefix</property>
+          <property name="Prefix"/>
+          <property name="Region">ap-south-1</property>
+          <property name="Polling Interval">30 sec</property>
+          <property name="Minimum Object Age">5 sec</property>
+          <property name="Batch Size">100</property>
+          <property name="Max Keys">1000</property>
+          <property name="credentials">aws-credentials-provider</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-fetchs3</id>
+        <name>FetchS3Object</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-standard-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Bucket"/>
+          <property name="Key">${s3.object.key}</property>
+          <property name="credentials">aws-credentials-provider</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-updateattr</id>
+        <name>UpdateAttribute</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-standard-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="correlation_id">${filename}-${now():format('yyyyMMddHHmmssSSS')}</property>
+          <property name="manifest_path">${s3.bucket}/${s3.object.key}</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-evaluatejsonpath</id>
+        <name>EvaluateJsonPath</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-standard-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="correlation_id">${correlation_id}</property>
+          <property name="ingest_ts">${now():toNumber()}</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-splitrecord</id>
+        <name>SplitRecord</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-record-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Record Reader">CSVReader</property>
+          <property name="Record Writer">JsonRecordSetWriter</property>
+          <property name="Record Count">5000</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-convertrecord</id>
+        <name>ConvertRecord</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-record-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Record Reader">AutoDetectReader</property>
+          <property name="Record Writer">AvroRecordSetWriter</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-validaterecord</id>
+        <name>ValidateRecord</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-standard-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Schema Access Strategy">Use 'Schema Name' property</property>
+          <property name="Schema">trade-canonical-schema</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-publishpulsar</id>
+        <name>PublishPulsarRecord</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-pulsar-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Service">PulsarClientService</property>
+          <property name="Topic">persistent://public/default/trades.incoming.normal</property>
+          <property name="Record Writer">AvroRecordSetWriter</property>
+          <property name="Compression Type">NONE</property>
+          <property name="Message Key">${tradeId}</property>
+          <property name="Batching">true</property>
+          <property name="Batch Size">100</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-archive</id>
+        <name>PutS3Object (archive)</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-standard-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Bucket">s3://your-archive-bucket/processed</property>
+          <property name="Region">ap-south-1</property>
+          <property name="Credentials">aws-credentials-provider</property>
+        </properties>
+      </processor>
+
+      <processor>
+        <id>proc-dlq</id>
+        <name>PublishPulsarRecord (DLQ)</name>
+        <bundle>
+          <group>org.apache.nifi</group>
+          <artifact>nifi-pulsar-nar</artifact>
+          <version>1.x</version>
+        </bundle>
+        <properties>
+          <property name="Service">PulsarClientService</property>
+          <property name="Topic">persistent://public/default/ingest.dlq</property>
+          <property name="Record Writer">JsonRecordSetWriter</property>
+          <property name="Message Key">${tradeId}</property>
+        </properties>
+      </processor>
+
+    </processors>
+
+    <controllerServices>
+      <controllerService>
+        <id>aws-credentials-provider</id>
+        <name>AWS Credentials Provider Service</name>
+        <class>org.apache.nifi.processors.aws.credentials.provider.service.AWSCredentialsProviderService</class>
+        <properties>
+          <property name="Access Key">YOUR_AWS_ACCESS_KEY</property>
+          <property name="Secret Key">YOUR_AWS_SECRET_KEY</property>
+        </properties>
+      </controllerService>
+
+      <controllerService>
+        <id>pulsar-client-service</id>
+        <name>PulsarClientService</name>
+        <class>org.apache.nifi.pulsar.services.PulsarClientService</class>
+        <properties>
+          <property name="Service URL">pulsar://pulsar-broker:6650</property>
+          <property name="Admin URL">http://pulsar-broker:8080</property>
+          <property name="Auth Plugin"/>
+        </properties>
+      </controllerService>
+
+      <controllerService>
+        <id>CSVReader</id>
+        <name>CSVReader</name>
+        <class>org.apache.nifi.csv.CSVReader</class>
+        <properties>
+          <property name="Schema Access Strategy">Use Schema Name</property>
+          <property name="Schema Name">trade-csv-schema</property>
+          <property name="Delimiter">,</property>
+          <property name="Treat First Line as Header">true</property>
+        </properties>
+      </controllerService>
+
+      <controllerService>
+        <id>JsonRecordSetWriter</id>
+        <name>JsonRecordSetWriter</name>
+        <class>org.apache.nifi.json.JsonRecordSetWriter</class>
+        <properties>
+          <property name="Schema Access Strategy">Use 'Schema Name' property</property>
+          <property name="Schema Name">trade-canonical-schema</property>
+        </properties>
+      </controllerService>
+
+      <controllerService>
+        <id>AvroRecordSetWriter</id>
+        <name>AvroRecordSetWriter</name>
+        <class>org.apache.nifi.avro.AvroRecordSetWriter</class>
+        <properties>
+          <property name="Schema Access Strategy">Use 'Schema Name' property</property>
+          <property name="Schema Name">trade-canonical-schema</property>
+        </properties>
+      </controllerService>
+
+      <controllerService>
+        <id>SchemaRegistry</id>
+        <name>Schema Registry Client</name>
+        <class>org.apache.nifi.schemaregistry.services.SchemaRegistryService</class>
+        <properties>
+          <property name="Schema Registry URL">http://schemaregistry:8081</property>
+        </properties>
+      </controllerService>
+
+      <controllerService>
+        <id>DistributedMapCacheClient</id>
+        <name>Distributed Map Cache Client</name>
+        <class>org.apache.nifi.distributed.cache.client.DistributedMapCacheClientService</class>
+        <properties>
+          <property name="Hostname">cache-host</property>
+          <property name="Port">4557</property>
+        </properties>
+      </controllerService>
+
+    </controllerServices>
+
+    <connections>
+      <connection>
+        <id>c1</id>
+        <sourceId>proc-lists3</sourceId>
+        <destinationId>proc-fetchs3</destinationId>
+        <relationship>success</relationship>
+      </connection>
+
+      <connection>
+        <id>c2</id>
+        <sourceId>proc-fetchs3</sourceId>
+        <destinationId>proc-updateattr</destinationId>
+        <relationship>success</relationship>
+      </connection>
+
+      <connection>
+        <id>c3</id>
+        <sourceId>proc-updateattr</sourceId>
+        <destinationId>proc-evaluatejsonpath</destinationId>
+        <relationship>success</relationship>
+      </connection>
+
+      <connection>
+        <id>c4</id>
+        <sourceId>proc-evaluatejsonpath</sourceId>
+        <destinationId>proc-splitrecord</destinationId>
+        <relationship>success</relationship>
+      </connection>
+
+      <connection>
+        <id>c5</id>
+        <sourceId>proc-splitrecord</sourceId>
+        <destinationId>proc-convertrecord</destinationId>
+        <relationship>success</relationship>
+      </connection>
+
+      <connection>
+        <id>c6</id>
+        <sourceId>proc-convertrecord</sourceId>
+        <destinationId>proc-validaterecord</destinationId>
+        <relationship>success</relationship>
+      </connection>
+
+      <connection>
+        <id>c7</id>
+        <sourceId>proc-validaterecord</sourceId>
+        <destinationId>proc-publishpulsar</destinationId>
+        <relationship>valid</relationship>
+      </connection>
+
+      <connection>
+        <id>c8</id>
+        <sourceId>proc-validaterecord</sourceId>
+        <destinationId>proc-dlq</destinationId>
+        <relationship>invalid</relationship>
+      </connection>
+
+      <connection>
+        <id>c9</id>
+        <sourceId>proc-publishpulsar</sourceId>
+        <destinationId>proc-archive</destinationId>
+        <relationship>success</relationship>
+      </connection>
+
+      <connection>
+        <id>c10</id>
+        <sourceId>proc-publishpulsar</sourceId>
+        <destinationId>proc-dlq</destinationId>
+        <relationship>failure</relationship>
+      </connection>
+
+    </connections>
+
+    <funnels/>
+    <labels/>
+  </snippet>
+</template>

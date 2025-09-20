@@ -1,0 +1,52 @@
+# docker-compose.yml
+version: "3.7"
+services:
+
+  pulsar:
+    image: apachepulsar/pulsar:2.11.0
+    hostname: pulsar
+    container_name: pulsar
+    ports:
+      - "6650:6650"   # pulsar binary
+      - "8080:8080"   # admin
+    command: >
+      bin/pulsar standalone
+    volumes:
+      - ./pulsar-data:/pulsar/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/metrics"]
+      interval: 10s
+      retries: 10
+
+  vault:
+    image: vault:1.14.0
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "root"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    command: "server -dev -dev-root-token-id=root"
+
+  flink-jobmanager:
+    image: flink:1.16-scala_2.12  # adapt to your Flink version
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    ports:
+      - "8081:8081"   # Flink Web UI
+    command: jobmanager
+    depends_on:
+      - pulsar
+    volumes:
+      - ./flink/plugins:/opt/flink/plugins  # place Pulsar connector jar here
+
+  flink-taskmanager:
+    image: flink:1.16-scala_2.12
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    volumes:
+      - ./flink/plugins:/opt/flink/plugins
+    deploy:
+      replicas: 1

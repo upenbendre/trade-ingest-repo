@@ -1,0 +1,5 @@
+4
+bookieHost: "172.20.0.2:45283"
+journalDir: "data/standalone/bookkeeper"
+ledgerDirs: "1\tdata/standalone/bookkeeper"
+instanceId: "6987a0a7-d2f4-4304-af84-cff3640e6273"
