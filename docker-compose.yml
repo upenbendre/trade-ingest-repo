@@ -1,0 +1,52 @@
+services:
+
+  pulsar:
+    image: apachepulsar/pulsar:2.11.0
+    hostname: pulsar
+    container_name: pulsar
+    ports:
+      - "6650:6650"
+      - "8080:8080"
+    command: bin/pulsar standalone
+    volumes:
+      - ./pulsar-data:/pulsar/data
+
+  vault:
+    image: hashicorp/vault:1.14.0
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "root"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    command: server -dev -dev-root-token-id=root
+
+  flink-jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    image: local/flink-with-pulsar:1.16
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    depends_on:
+      - pulsar
+      - vault
+    volumes:
+      - ./flink/plugins:/opt/flink/plugins
+
+  flink-taskmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    image: local/flink-with-pulsar:1.16
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    volumes:
+      - ./flink/plugins:/opt/flink/plugins
+    deploy:
+      replicas: 1
